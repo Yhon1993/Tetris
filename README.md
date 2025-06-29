@@ -1,7 +1,3 @@
-Claro, aquí tienes una propuesta para el archivo `README.md` basada en el nuevo script que proporcionaste. He actualizado la estructura, las dependencias, los controles y las explicaciones para que coincidan con el código actual.
-
------
-
 # Megatetris
 
 Este proyecto es una implementación completa y moderna del juego **Tetris** en un solo archivo de Python, utilizando **Pygame** para los gráficos y **NumPy** para la gestión eficiente del tablero. El código está completamente comentado en castellano y sigue una arquitectura Modelo-Vista-Controlador (MVC).
