@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Megatetris — versión completa y comentada en castellano
+"""Megatetris — versión completa
 ===========================================================
 Tetris minimalista con Pygame + NumPy.
 
