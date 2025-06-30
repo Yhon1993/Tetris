@@ -7,7 +7,7 @@ Este script contiene toda la lógica del juego, desde la definición de las piez
 y el tablero, hasta el control de la partida, la renderización y la interfaz
 de usuario (HUD).
 
-Autor: [Tu Nombre/Alias Aquí]
+Autor: [Juan Galaz]
 Fecha: 30 de junio de 2025
 """
 
