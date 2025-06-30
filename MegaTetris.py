@@ -1,74 +1,76 @@
-from __future__ import annotations
+# -*- coding: utf-8 -*-
+"""
+Megatetris Mejorado: Un clon del clásico juego Tetris implementado en Python
+utilizando la librería Pygame.
 
-"""Megatetris — versión completa
-===========================================================
-Tetris minimalista con Pygame + NumPy.
+Este script contiene toda la lógica del juego, desde la definición de las piezas
+y el tablero, hasta el control de la partida, la renderización y la interfaz
+de usuario (HUD).
 
-Arquitectura *MVC*:
-    • Modelo  → `Tablero` y `Pieza` (reglas y estado).
-    • Vista   → funciones de dibujo.
-    • Control → clase `Juego` (bucle principal y eventos).
-
-Instalación dependencias:
-    pip install pygame numpy
+Autor: [Tu Nombre/Alias Aquí]
+Fecha: 30 de junio de 2025
 """
 
-###############################################################################
-# IMPORTACIONES                                                               #
-###############################################################################
-
-# Librerías estándar para lógica de juego, sistema y tipado
+# -------------------------------------------------------------------
+# MÓDULOS Y LIBRERÍAS
+# -------------------------------------------------------------------
 import random
 import sys
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, List, Tuple
 
-# Librerías externas para manejo de matrices y gráficos
 import numpy as np
 import pygame
 
-###############################################################################
-# CONSTANTES                                                                  #
-###############################################################################
+# -------------------------------------------------------------------
+# CONSTANTES DE CONFIGURACIÓN DEL JUEGO
+# -------------------------------------------------------------------
+# -- Dimensiones y Velocidad --
+TAM_BLOQUE = 30  # Tamaño en píxeles de cada bloque cuadrado de una pieza.
+COLUMNAS = 10  # Ancho del tablero de juego en número de bloques.
+FILAS = 20  # Alto del tablero de juego en número de bloques.
+SCREEN_W = COLUMNAS * TAM_BLOQUE + 150  # Ancho total de la ventana (tablero + espacio para HUD).
+SCREEN_H = FILAS * TAM_BLOQUE  # Alto total de la ventana.
+TARGET_FPS = 60  # Fotogramas por segundo objetivo para el bucle del juego.
+BASE_SPEED_MS = 600  # Velocidad de caída inicial en milisegundos por paso.
+MIN_SPEED_MS = 80  # Velocidad de caída mínima (máxima dificultad).
+LEVEL_LINES = 10  # Cantidad de líneas a limpiar para subir de nivel.
 
-TAM_BLOQUE: int = 30          # Tamaño en píxeles de cada bloque de la cuadrícula
-COLUMNAS: int = 10            # Número de columnas del tablero
-FILAS: int = 20               # Número de filas del tablero
-FPS: int = 60                 # Fotogramas por segundo del juego
-
-COLOR_CUADRICULA = (50, 50, 50)  # Color de las líneas de la cuadrícula
-COLORES_FONDO = [                # Colores de fondo según nivel
-    (25, 25, 25),
-    (25, 45, 25),
-    (25, 25, 45),
-    (45, 25, 25),
-]
-COLORES_BLOQUE = [               # Colores de cada tipo de pieza
-    (0, 255, 255),  # I
-    (255, 0, 255),  # T
-    (255, 128, 0),  # L
-    (0, 0, 255),    # J
-    (0, 255, 0),    # S
-    (255, 0, 0),    # Z
-    (255, 255, 0),  # O
+# -- Colores (Tuplas RGB) --
+COLOR_GRID = (50, 50, 50)  # Color de las líneas de la cuadrícula del tablero.
+FONDO_NIVELES = [(25, 25, 25), (25, 45, 25), (25, 25, 45), (45, 25, 25)]  # Colores de fondo (actualmente solo se usa el primero).
+COLORES_BLOQUES = [
+    (0, 255, 255), (255, 0, 255), (255, 128, 0),
+    (0, 0, 255), (0, 255, 0), (255, 0, 0), (255, 255, 0),
 ]
 
-###############################################################################
-# ENUMERACIONES Y FORMAS                                                      #
-###############################################################################
+# -- Mecánicas de Juego --
+# Desplazamientos para 'wall-kick', una técnica que permite rotar piezas cerca de las paredes.
+WALL_KICKS = [(0, 0), (1, 0), (-1, 0), (0, -1)]
 
+# -------------------------------------------------------------------
+# DEFINICIÓN DE PIEZAS
+# -------------------------------------------------------------------
 class TipoPieza(Enum):
-    """Enumera los tipos de pieza de Tetris y proporciona su color."""
-    I = 0; T = 1; L = 2; J = 3; S = 4; Z = 5; O = 6
+    """Enumeración para los distintos tipos de piezas (tetrominós)."""
+    I = 0
+    T = 1
+    L = 2
+    J = 3
+    S = 4
+    Z = 5
+    O = 6
 
     @property
-    def color(self) -> Tuple[int,int,int]:
-        """Devuelve el color RGB asociado al tipo de pieza."""
-        return COLORES_BLOQUE[self.value]
+    def color(self) -> Tuple[int, int, int]:
+        """Devuelve el color asociado a este tipo de pieza."""
+        return COLORES_BLOQUES[self.value]
 
-# Definición de las formas relativas de cada pieza respecto a su posición central
-FORMAS: dict[TipoPieza, List[Tuple[int,int]]] = {
+# Diccionario que mapea cada tipo de pieza a la forma de sus bloques.
+# Las coordenadas son relativas a un punto de pivote (0,0).
+FORMAS = {
     TipoPieza.I: [(-2, 0), (-1, 0), (0, 0), (1, 0)],
     TipoPieza.T: [(-1, 0), (0, 0), (1, 0), (0, -1)],
     TipoPieza.L: [(-1, 0), (0, 0), (1, 0), (-1, -1)],
@@ -78,280 +80,316 @@ FORMAS: dict[TipoPieza, List[Tuple[int,int]]] = {
     TipoPieza.O: [(0, 0), (1, 0), (0, -1), (1, -1)],
 }
 
-###############################################################################
-# AUXILIARES                                                                  #
-###############################################################################
+def rotar_90(p: Tuple[int, int]) -> Tuple[int, int]:
+    """
+    Calcula la nueva coordenada de un punto al rotarlo 90 grados en sentido horario
+    alrededor del origen (0,0).
 
-# Función auxiliar para rotar un punto 90 grados en sentido antihorario
-def rotar_90(p: Tuple[int,int]) -> Tuple[int,int]:
-    """Rota 90° un par de coordenadas (x, y) y devuelve (−y, x)."""
+    Args:
+        p (Tuple[int, int]): La coordenada (x, y) a rotar.
+
+    Returns:
+        Tuple[int, int]: La nueva coordenada después de la rotación.
+    """
     x, y = p
     return -y, x
 
-###############################################################################
-# MODELO                                                                      #
-###############################################################################
-
+# -------------------------------------------------------------------
+# MODELO DE DATOS (Clases para la lógica del juego)
+# -------------------------------------------------------------------
 @dataclass
 class Pieza:
-    """Representa una pieza en juego con su tipo, posición y bloques relativos."""
+    """
+    Representa una pieza activa en el juego.
+
+    Attributes:
+        tipo (TipoPieza): El tipo de tetrominó (I, T, L, etc.).
+        pos (Tuple[int, int]): La posición (columna, fila) del pivote de la pieza en el tablero.
+        bloques (List[Tuple[int, int]]): Coordenadas relativas de los bloques que la componen.
+        has_held (bool): Bandera para controlar si la pieza ya fue guardada (hold).
+    """
     tipo: TipoPieza
     pos: Tuple[int, int]
     bloques: List[Tuple[int, int]] = field(init=False)
+    has_held: bool = False
 
     def __post_init__(self):
-        """Inicializa la lista de bloques copiando la forma base según el tipo."""
+        """Inicializa los bloques de la pieza copiando su forma base."""
         self.bloques = FORMAS[self.tipo].copy()
 
-    def celdas(self) -> List[Tuple[int,int]]:
-        """Devuelve las coordenadas absolutas de cada bloque de la pieza."""
-        c0, f0 = self.pos
-        return [(c0 + dx, f0 + dy) for dx, dy in self.bloques]
+    def celdas(self) -> List[Tuple[int, int]]:
+        """
+        Calcula las coordenadas absolutas de cada bloque de la pieza en el tablero.
 
-    def rotar(self, tab: Tablero) -> None:
+        Returns:
+            List[Tuple[int, int]]: Una lista de tuplas (columna, fila) para cada bloque.
         """
-        Rota la pieza 90° si no es cuadrada y la nueva posición es válida.
-        Comprueba colisiones con el tablero antes de aplicar la rotación.
-        """
-        if self.tipo is TipoPieza.O:
-            return  # La pieza O no rota
-        nuevos = [rotar_90(b) for b in self.bloques]
-        nuevas_celdas = [(self.pos[0] + dx, self.pos[1] + dy) for dx, dy in nuevos]
-        if tab.validas(nuevas_celdas):
-            self.bloques = nuevos
+        x0, y0 = self.pos
+        return [(x0 + dx, y0 + dy) for dx, dy in self.bloques]
 
-    def mover(self, dc: int, df: int, tab: Tablero) -> bool:
+    def mover(self, dx: int, dy: int, tab: 'Tablero') -> bool:
         """
-        Intenta mover la pieza en horizontal (dc) y vertical (df).
-        Retorna True si el movimiento es válido y actualiza la posición.
+        Intenta mover la pieza en una dirección (dx, dy).
+
+        Args:
+            dx (int): Desplazamiento horizontal.
+            dy (int): Desplazamiento vertical.
+            tab (Tablero): Referencia al tablero para validar el movimiento.
+
+        Returns:
+            bool: True si el movimiento fue exitoso, False en caso contrario.
         """
-        nueva_pos = (self.pos[0] + dc, self.pos[1] + df)
-        nuevas_celdas = [(nueva_pos[0] + dx, nueva_pos[1] + dy) for dx, dy in self.bloques]
-        if tab.validas(nuevas_celdas):
+        nueva_pos = (self.pos[0] + dx, self.pos[1] + dy)
+        celdas_propuestas = [(nueva_pos[0] + bx, nueva_pos[1] + by) for bx, by in self.bloques]
+        if tab.validas(celdas_propuestas):
             self.pos = nueva_pos
             return True
         return False
 
+    def rotar(self, tab: 'Tablero') -> None:
+        """
+        Intenta rotar la pieza 90 grados. Aplica 'wall-kicks' si es necesario.
+
+        Args:
+            tab (Tablero): Referencia al tablero para validar la rotación.
+        """
+        # La pieza 'O' no rota.
+        if self.tipo is TipoPieza.O:
+            return
+
+        nueva_forma = [rotar_90(b) for b in self.bloques]
+
+        # Intenta la rotación con cada posible 'wall-kick'.
+        for ox, oy in WALL_KICKS:
+            celdas_propuestas = [(self.pos[0] + dx + ox, self.pos[1] + dy + oy) for dx, dy in nueva_forma]
+            if tab.validas(celdas_propuestas):
+                self.bloques = nueva_forma
+                self.pos = (self.pos[0] + ox, self.pos[1] + oy)
+                break  # Sale del bucle al encontrar una rotación válida.
+
 @dataclass
 class Tablero:
-    """Modelo de la cuadrícula del juego: estado de celdas y operaciones de línea."""
+    """
+    Representa el estado del tablero de juego.
+
+    Attributes:
+        cols (int): Número de columnas.
+        filas (int): Número de filas.
+        grid (np.ndarray): Matriz 2D que almacena el estado de cada celda.
+                           0 si está vacía, o el valor del tipo de pieza + 1 si está ocupada.
+    """
     cols: int = COLUMNAS
     filas: int = FILAS
     grid: np.ndarray = field(default_factory=lambda: np.zeros((FILAS, COLUMNAS), int))
 
     def dentro(self, c: int, f: int) -> bool:
-        """Comprueba si la columna c y fila f están dentro del tablero."""
+        """Verifica si una coordenada (c, f) está dentro de los límites del tablero."""
         return 0 <= c < self.cols and 0 <= f < self.filas
 
     def libre(self, c: int, f: int) -> bool:
-        """Indica si la celda (c, f) está vacía (valor 0)."""
+        """Verifica si una celda (c, f) del tablero está vacía."""
         return self.grid[f, c] == 0
 
-    def validas(self, celdas: Iterable[Tuple[int,int]]) -> bool:
-        """Comprueba que todas las celdas dadas estén dentro y libres."""
+    def validas(self, celdas: Iterable[Tuple[int, int]]) -> bool:
+        """Verifica si una colección de celdas son posiciones válidas y libres."""
         return all(self.dentro(c, f) and self.libre(c, f) for c, f in celdas)
 
     def fijar(self, p: Pieza) -> None:
-        """Fija la pieza p en el tablero marcando sus celdas con su índice (+1)."""
+        """
+        Fija una pieza en el tablero, haciendo que sus bloques formen parte del grid.
+
+        Args:
+            p (Pieza): La pieza a fijar.
+        """
         for c, f in p.celdas():
-            self.grid[f, c] = p.tipo.value + 1
+            if self.dentro(c, f):
+                self.grid[f, c] = p.tipo.value + 1
 
     def limpiar(self) -> int:
         """
-        Elimina las filas completas y añade filas vacías en la parte superior.
-        Retorna el número de filas eliminadas.
-        """
-        llenas = [i for i in range(self.filas) if all(self.grid[i])]
-        if llenas:
-            # Eliminar filas completas
-            self.grid = np.delete(self.grid, llenas, axis=0)
-            # Añadir filas vacías arriba
-            nuevas = np.zeros((len(llenas), self.cols), int)
-            self.grid = np.vstack([nuevas, self.grid])
-        return len(llenas)
+        Busca y elimina las filas completas del tablero.
 
-    def over(self) -> bool:
-        """Determina si el juego ha terminado (si alguna celda de la fila 0 está ocupada)."""
+        Returns:
+            int: El número de filas limpiadas en esta operación.
+        """
+        # Encuentra los índices de las filas donde todas las celdas son no-cero.
+        filas_llenas = [i for i in range(self.filas) if all(self.grid[i])]
+        if not filas_llenas:
+            return 0  # No hay nada que limpiar.
+
+        # Elimina las filas llenas del grid.
+        self.grid = np.delete(self.grid, filas_llenas, axis=0)
+
+        # Añade nuevas filas vacías en la parte superior del tablero.
+        nuevas_filas = np.zeros((len(filas_llenas), self.cols), int)
+        self.grid = np.vstack([nuevas_filas, self.grid])
+
+        return len(filas_llenas)
+
+    def game_over(self) -> bool:
+        """Verifica si la condición de Game Over se ha cumplido (bloques en la fila superior)."""
         return any(self.grid[0])
 
-###############################################################################
-# TEMPORIZADOR                                                                #
-###############################################################################
+# -------------------------------------------------------------------
+# CLASES AUXILIARES
+# -------------------------------------------------------------------
+class DeltaTimer:
+    """
+    Un temporizador que se activa a intervalos regulares, independiente de los FPS.
+    Utiliza el tiempo delta (dt) para acumular tiempo.
+    """
 
-class Timer:
-    """Controla el tiempo para movimientos automáticos de la pieza."""
-    def __init__(self, ms: int):
+    def __init__(self, speed_ms: int):
         """
-        Inicializa el temporizador.
-        :param ms: Intervalo en milisegundos para disparar el evento.
-        """
-        self.ms = ms
-        self.t0 = pygame.time.get_ticks()
+        Inicializa el temporizador con una velocidad de activación.
 
-    def listo(self) -> bool:
+        Args:
+            speed_ms (int): El intervalo en milisegundos para que el timer se active.
         """
-        Comprueba si ha transcurrido el intervalo.
-        Si es así, reinicia el contador y retorna True.
+        self.speed = speed_ms
+        self.accum = 0
+
+    def update(self, dt: int) -> bool:
         """
-        t = pygame.time.get_ticks()
-        if t - self.t0 >= self.ms:
-            self.t0 = t
+        Actualiza el temporizador con el tiempo transcurrido desde el último frame.
+
+        Args:
+            dt (int): Delta time en milisegundos.
+
+        Returns:
+            bool: True si el temporizador ha cumplido su intervalo, False de lo contrario.
+        """
+        self.accum += dt
+        if self.accum >= self.speed:
+            self.accum %= self.speed  # Resetea el acumulador conservando el exceso.
             return True
         return False
 
-###############################################################################
-# CONTROL Y VISTA                                                             #
-###############################################################################
-
+# -------------------------------------------------------------------
+# CLASE PRINCIPAL DEL JUEGO
+# -------------------------------------------------------------------
 class Juego:
-    """Clase principal que integra la lógica del juego y la renderización."""
+    """
+    Clase que encapsula toda la lógica, el estado y la visualización del juego.
+    """
+
     def __init__(self):
-        """Configura Pygame, crea el tablero, la primera pieza y valores iniciales."""
+        """Inicializa Pygame, la ventana, y el estado inicial del juego."""
+        # Inicialización de Pygame y la ventana.
         pygame.init()
-        self.screen = pygame.display.set_mode((COLUMNAS * TAM_BLOQUE, FILAS * TAM_BLOQUE))
-        pygame.display.set_caption("Megatetris — Español")
+        self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+        pygame.display.set_caption("Megatetris Mejorado")
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("consolas", 18)
 
+        # Creación de una superficie pre-renderizada para la cuadrícula para optimizar el dibujado.
+        self.grid_surf = pygame.Surface((COLUMNAS * TAM_BLOQUE, FILAS * TAM_BLOQUE))
+        self.grid_surf.fill(FONDO_NIVELES[0])
+        for c in range(COLUMNAS + 1):
+            x = c * TAM_BLOQUE
+            pygame.draw.line(self.grid_surf, COLOR_GRID, (x, 0), (x, SCREEN_H))
+        for r in range(FILAS + 1):
+            y = r * TAM_BLOQUE
+            pygame.draw.line(self.grid_surf, COLOR_GRID, (0, y), (COLUMNAS * TAM_BLOQUE, y))
+
+        # Inicialización del estado del juego.
         self.tab = Tablero()
-        self.bag: List[TipoPieza] = []
-        self.pieza: Pieza = self._nueva()
+        self.bag = deque()  # '7-bag' para generar piezas de forma pseudo-aleatoria.
+        self.pieza = self._sacar_pieza()
+        self.next = self._sacar_pieza()
+        self.hold = None
 
-        self.nivel = 1
-        self.lineas = 0
-        self.puntos = 0
-        self.timer = Timer(self._intervalo())
+        # Estadísticas del jugador.
+        self.level = 1
+        self.lines = 0
+        self.score = 0
+        self.timer = DeltaTimer(BASE_SPEED_MS)
 
-    # ----- Gestión de la 'bolsa' y creación de nuevas piezas -----
+    def _sacar_pieza(self) -> Pieza:
+        """
+        Obtiene una nueva pieza del '7-bag'. Si el 'bag' está casi vacío, lo rellena.
 
-    def _nueva(self) -> Pieza:
+        Returns:
+            Pieza: La nueva pieza generada.
         """
-        Saca una pieza aleatoria de la bolsa.
-        Rellena la bolsa con las 7 piezas cuando está vacía.
-        """
-        if not self.bag:
-            self.bag = random.sample(list(TipoPieza), 7)
-        tipo = self.bag.pop()
-        # Posición inicial centrada en la parte superior
-        return Pieza(tipo, (COLUMNAS // 2, 0))
+        if len(self.bag) < 2:
+            # Rellena el 'bag' con las 7 piezas en orden aleatorio.
+            piezas_nuevas = list(TipoPieza)
+            random.shuffle(piezas_nuevas)
+            self.bag.extend(piezas_nuevas)
+        
+        tipo_pieza = self.bag.popleft()
+        return Pieza(tipo_pieza, (COLUMNAS // 2, 0)) # Posición inicial en la parte superior central.
 
-    def _intervalo(self) -> int:
-        """
-        Calcula el intervalo de caída automática según el nivel actual.
-        Disminuye el tiempo con niveles más altos, hasta un mínimo de 80 ms.
-        """
-        return max(80, 600 - (self.nivel - 1) * 50)
+    def _update_speed(self):
+        """Actualiza la velocidad de caída de la pieza según el nivel actual."""
+        ms = max(MIN_SPEED_MS, BASE_SPEED_MS - (self.level - 1) * 50)
+        self.timer.speed = ms
 
-    # ----- Lógica de fijado y borrado de líneas -----
-
-    def _bloquear(self) -> None:
-        """
-        Fija la pieza actual en el tablero, limpia líneas completas,
-        actualiza puntos, nivel y configura nueva pieza.
-        """
+    def _lock_piece(self):
+        """Fija la pieza actual, limpia líneas, actualiza puntaje y genera una nueva pieza."""
         self.tab.fijar(self.pieza)
-        limp = self.tab.limpiar()
-        if limp:
-            self.lineas += limp
-            self.puntos += limp * 100 * self.nivel
-            # Subir de nivel cada 10 líneas
-            nuevo_nivel = self.lineas // 10 + 1
-            if nuevo_nivel > self.nivel:
-                self.nivel = nuevo_nivel
-                self.timer.ms = self._intervalo()
-        self.pieza = self._nueva()
+        cleared = self.tab.limpiar()
 
-    def _soft(self) -> None:
-        """
-        Movimiento suave: baja la pieza un paso.
-        Si choca, fija la pieza (_bloquear).
-        """
-        if not self.pieza.mover(0, 1, self.tab):
-            self._bloquear()
+        if cleared:
+            self.lines += cleared
+            self.score += cleared * 100 * self.level
+            # Calcula el nuevo nivel basado en el total de líneas limpiadas.
+            new_level = self.lines // LEVEL_LINES + 1
+            if new_level > self.level:
+                self.level = new_level
+                self._update_speed()
 
-    def _hard(self) -> None:
-        """
-        Movimiento duro: baja la pieza hasta el fondo de golpe
-        y luego fija la pieza (_bloquear).
-        """
+        # La pieza siguiente ('next') se convierte en la pieza actual.
+        self.pieza = self.next
+        self.next = self._sacar_pieza()
+        
+        # Permite usar la función 'hold' de nuevo.
+        self.pieza.has_held = False
+
+    def _hard_drop(self):
+        """Deja caer la pieza instantáneamente hasta el fondo."""
+        # Mueve la pieza hacia abajo hasta que no pueda más.
         while self.pieza.mover(0, 1, self.tab):
             pass
-        self._bloquear()
+        self._lock_piece()
 
-    # ----- Renderizado de pantalla -----
+    def _draw_hud(self):
+        """Dibuja toda la información de la interfaz (Score, Level, Next, Hold)."""
+        # Dibuja el texto de Score, Lines y Level.
+        hud_texts = [f"Score: {self.score}", f"Lines: {self.lines}", f"Level: {self.level}"]
+        for i, text in enumerate(hud_texts):
+            surf = self.font.render(text, True, (240, 240, 240))
+            self.screen.blit(surf, (COLUMNAS * TAM_BLOQUE + 10, 10 + i * 20))
 
-    def _draw(self) -> None:
-        """
-        Dibuja fondo, cuadrícula, bloques fijos, pieza activa y HUD.
-        """
-        # Fondo según nivel
-        color_fondo = COLORES_FONDO[(self.nivel - 1) % len(COLORES_FONDO)]
-        self.screen.fill(color_fondo)
+        # Dibuja la previsualización de la pieza 'Next'.
+        self.font.set_italic(True)
+        self.screen.blit(self.font.render("Next:", True, (240, 240, 240)), (COLUMNAS * TAM_BLOQUE + 10, 80))
+        for dx, dy in FORMAS[self.next.tipo]:
+            x = COLUMNAS * TAM_BLOQUE + 50 + dx * TAM_BLOQUE // 2
+            y = 120 + dy * TAM_BLOQUE // 2
+            rect = pygame.Rect(x, y, TAM_BLOQUE // 2, TAM_BLOQUE // 2)
+            pygame.draw.rect(self.screen, self.next.tipo.color, rect)
+        
+        # Dibuja la pieza en 'Hold' si existe.
+        self.screen.blit(self.font.render("Hold:", True, (240, 240, 240)), (COLUMNAS * TAM_BLOQUE + 10, 200))
+        if self.hold:
+            for dx, dy in FORMAS[self.hold.tipo]:
+                x = COLUMNAS * TAM_BLOQUE + 50 + dx * TAM_BLOQUE // 2
+                y = 230 + dy * TAM_BLOQUE // 2
+                rect = pygame.Rect(x, y, TAM_BLOQUE // 2, TAM_BLOQUE // 2)
+                pygame.draw.rect(self.screen, self.hold.tipo.color, rect)
+        
+        self.font.set_italic(False)
 
-        # Dibujar líneas de cuadrícula
-        for c in range(COLUMNAS):
-            x = c * TAM_BLOQUE
-            pygame.draw.line(self.screen, COLOR_CUADRICULA, (x, 0), (x, FILAS * TAM_BLOQUE))
-        for f in range(FILAS):
-            y = f * TAM_BLOQUE
-            pygame.draw.line(self.screen, COLOR_CUADRICULA, (0, y), (COLUMNAS * TAM_BLOQUE, y))
-
-        # Dibujar bloques fijos en el tablero
-        for f in range(FILAS):
-            for c in range(COLUMNAS):
-                v = self.tab.grid[f, c]
-                if v:
-                    rect = pygame.Rect(
-                        c * TAM_BLOQUE + 1,
-                        f * TAM_BLOQUE + 1,
-                        TAM_BLOQUE - 2,
-                        TAM_BLOQUE - 2
-                    )
-                    pygame.draw.rect(self.screen, COLORES_BLOQUE[v - 1], rect)
-
-        # Dibujar pieza activa
-        for c, f in self.pieza.celdas():
-            rect = pygame.Rect(
-                c * TAM_BLOQUE + 1,
-                f * TAM_BLOQUE + 1,
-                TAM_BLOQUE - 2,
-                TAM_BLOQUE - 2
-            )
-            pygame.draw.rect(self.screen, self.pieza.tipo.color, rect)
-
-        # Dibujar HUD (puntos, líneas, nivel)
-        textos = [f"Puntos: {self.puntos}", f"Líneas: {self.lineas}", f"Nivel: {self.nivel}"]
-        for i, txt in enumerate(textos):
-            surf = self.font.render(txt, True, (240, 240, 240))
-            self.screen.blit(surf, (5, 5 + i * 18))
-
-    def _gameover(self) -> None:
-        """
-        Muestra la pantalla de Game Over con semitransparencia
-        y espera 2.5 segundos antes de salir.
-        """
-        overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 180))
-        self.screen.blit(overlay, (0, 0))
-        txt = self.font.render("GAME OVER", True, (255, 60, 60))
-        rect = txt.get_rect(center=self.screen.get_rect().center)
-        self.screen.blit(txt, rect)
-        pygame.display.flip()
-        pygame.time.wait(2500)
-
-    # ----- Bucle principal del juego -----
-
-    def run(self) -> None:
-        """
-        Ejecuta el bucle principal: procesa eventos, actualiza estado,
-        dibuja y comprueba fin de juego.
-        """
+    def run(self):
+        """El bucle principal del juego que maneja eventos, lógica y renderizado."""
         running = True
         while running:
-            # Control de FPS
-            self.clock.tick(FPS)
+            # Calcula el tiempo delta (dt) para un movimiento y lógica consistentes.
+            dt = self.clock.tick(TARGET_FPS)
 
-            # Gestión de eventos de usuario
+            # --- GESTIÓN DE EVENTOS ---
             for e in pygame.event.get():
                 if e.type == pygame.QUIT:
                     running = False
@@ -361,37 +399,68 @@ class Juego:
                     elif e.key == pygame.K_RIGHT:
                         self.pieza.mover(1, 0, self.tab)
                     elif e.key == pygame.K_DOWN:
-                        self._soft()
+                        # Si no puede bajar más, se fija. Si no, baja un paso.
+                        if not self.pieza.mover(0, 1, self.tab):
+                            self._lock_piece()
                     elif e.key == pygame.K_UP:
                         self.pieza.rotar(self.tab)
                     elif e.key == pygame.K_SPACE:
-                        self._hard()
+                        self._hard_drop()
+                    elif e.key == pygame.K_c: # Tecla para 'Hold'
+                        # Solo se puede hacer 'hold' una vez por pieza.
+                        if not self.pieza.has_held:
+                            if self.hold is None:
+                                self.hold = self.pieza
+                                self.pieza = self.next
+                                self.next = self._sacar_pieza()
+                            else:
+                                # Intercambia la pieza actual con la de 'hold'.
+                                self.hold, self.pieza = self.pieza, self.hold
+                            
+                            self.pieza.pos = (COLUMNAS // 2, 0) # Resetea la posición.
+                            self.pieza.has_held = True # Bloquea el 'hold' para esta pieza.
 
-            # Salir con ESC
-            if pygame.key.get_pressed()[pygame.K_ESCAPE]:
-                running = False
+            # --- LÓGICA DEL JUEGO ---
+            # Caída automática de la pieza basada en el temporizador.
+            if self.timer.update(dt):
+                if not self.pieza.mover(0, 1, self.tab):
+                    self._lock_piece()
 
-            # Caída automática según temporizador
-            if self.timer.listo():
-                self._soft()
+            # --- DIBUJADO / RENDERIZADO ---
+            # 1. Limpia toda la pantalla con un fondo negro.
+            self.screen.fill((0, 0, 0))
+            # 2. Dibuja la cuadrícula pre-renderizada.
+            self.screen.blit(self.grid_surf, (0, 0))
+            # 3. Dibuja los bloques ya fijados en el tablero.
+            for r in range(FILAS):
+                for c in range(COLUMNAS):
+                    val_celda = self.tab.grid[r, c]
+                    if val_celda:
+                        rect = pygame.Rect(c * TAM_BLOQUE + 1, r * TAM_BLOQUE + 1, TAM_BLOQUE - 2, TAM_BLOQUE - 2)
+                        pygame.draw.rect(self.screen, COLORES_BLOQUES[val_celda - 1], rect)
+            # 4. Dibuja la pieza activa.
+            for c, r in self.pieza.celdas():
+                rect = pygame.Rect(c * TAM_BLOQUE + 1, r * TAM_BLOQUE + 1, TAM_BLOQUE - 2, TAM_BLOQUE - 2)
+                pygame.draw.rect(self.screen, self.pieza.tipo.color, rect)
+            # 5. Dibuja la interfaz de usuario (HUD).
+            self._draw_hud()
 
-            # Dibujar todo y actualizar pantalla
-            self._draw()
+            # 6. Actualiza la pantalla para mostrar todo lo dibujado.
             pygame.display.flip()
 
-            # Comprobar Game Over
-            if self.tab.over():
-                self._gameover()
+            # --- COMPROBACIÓN DE FIN DE JUEGO ---
+            if self.tab.game_over():
+                pygame.time.wait(1500) # Pausa para que el jugador vea el tablero final.
                 running = False
 
-        # Salir de Pygame y del programa
+        # Cierra Pygame y el programa al salir del bucle.
         pygame.quit()
         sys.exit()
 
-###############################################################################
-# MAIN                                                                        #
-###############################################################################
-
+# -------------------------------------------------------------------
+# PUNTO DE ENTRADA PRINCIPAL
+# -------------------------------------------------------------------
 if __name__ == "__main__":
-    # Inicia el juego cuando se ejecute directamente este archivo
-    Juego().run()
+    # Crea una instancia del juego y ejecuta el bucle principal.
+    juego = Juego()
+    juego.run()
